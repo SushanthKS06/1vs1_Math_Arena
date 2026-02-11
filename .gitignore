@@ -1,0 +1,39 @@
+### General
+.DS_Store
+*.swp
+*.log
+Thumbs.db
+.vscode/
+.idea/
+.env
+.env.local
+*.orig
+
+### Go
+/backend/bin/
+/backend/vendor/
+*.exe
+*.test
+*.prof
+/backend/coverage.txt
+__debug_bin
+
+### Node / React Native
+node_modules/
+npm-debug.log
+yarn-error.log
+yarn-debug.log
+.expo/
+web-build/
+dist/
+
+### Mobile - Android
+/mobile/**/android/build/
+/mobile/**/android/app/build/
+/mobile/**/android/.gradle/
+
+### Mobile - iOS
+/mobile/**/ios/Pods/
+/mobile/**/ios/build/
+/mobile/**/ios/.xcode.env.local
+/mobile/**/ios/.xcode.env

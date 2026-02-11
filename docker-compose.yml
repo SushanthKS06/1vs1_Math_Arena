@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8888:8888"
+    environment:
+      - SERVER_PORT=8888
+      - REDIS_ADDR=redis:6379
+      - JWT_SECRET=${JWT_SECRET:-dev-secret-change-in-production}
+      - TOTAL_ROUNDS=10
+      - ROUND_DURATION_SEC=10
+      - GRACE_PERIOD_SEC=30
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis_data:
