@@ -1,12 +1,17 @@
 package ws
 
 import (
+	"context"
 	"encoding/json"
+	"strings"
 	"sync"
+	"time"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/mentalarena/backend/internal/game"
 	"github.com/mentalarena/backend/internal/matchmaker"
 	"github.com/mentalarena/backend/internal/protocol"
+	redisclient "github.com/mentalarena/backend/internal/redis"
 	"github.com/rs/zerolog"
 )
 
@@ -19,21 +24,27 @@ type Hub struct {
 
 	gameManager *game.GameManager
 	matchmaker  *matchmaker.Matchmaker
+	redis       *redisclient.Client
+	pubsub      *redis.PubSub
 
 	logger zerolog.Logger
 }
 
-func NewHub(gm *game.GameManager, mm *matchmaker.Matchmaker, logger zerolog.Logger) *Hub {
+func NewHub(gm *game.GameManager, mm *matchmaker.Matchmaker, rdb *redisclient.Client, logger zerolog.Logger) *Hub {
 	hub := &Hub{
 		clients:      make(map[string]*Client),
 		registerCh:   make(chan *Client, 100),
 		unregisterCh: make(chan *Client, 100),
 		gameManager:  gm,
 		matchmaker:   mm,
+		redis:        rdb,
+		pubsub:       rdb.Underlying().Subscribe(context.Background()),
 		logger:       logger.With().Str("component", "hub").Logger(),
 	}
 
 	gm.SetSendCallback(hub.SendToPlayer)
+
+	go hub.listenPubSub()
 
 	return hub
 }
@@ -59,6 +70,7 @@ func (h *Hub) handleRegister(client *Client) {
 	}
 
 	h.clients[client.PlayerID] = client
+	h.pubsub.Subscribe(context.Background(), "player:messages:"+client.PlayerID)
 	h.logger.Info().Str("player_id", client.PlayerID).Msg("client_registered")
 }
 
@@ -68,6 +80,7 @@ func (h *Hub) handleUnregister(client *Client) {
 
 	if existing, exists := h.clients[client.PlayerID]; exists && existing == client {
 		delete(h.clients, client.PlayerID)
+		h.pubsub.Unsubscribe(context.Background(), "player:messages:"+client.PlayerID)
 		client.Close()
 		h.logger.Info().Str("player_id", client.PlayerID).Msg("client_unregistered")
 
@@ -166,13 +179,25 @@ func (h *Hub) handleAnswer(client *Client, msg *protocol.Message) {
 		return
 	}
 
-	result := h.gameManager.SubmitAnswer(client.PlayerID, payload)
+	if _, exists := h.gameManager.GetSession(payload.GameID); exists {
+		result := h.gameManager.SubmitAnswer(client.PlayerID, payload)
 
-	client.Send(protocol.MustMessage(protocol.MsgAnswerAck, protocol.AnswerAckPayload{
-		Round:    payload.Round,
-		Accepted: result.Accepted,
-		Reason:   result.Reason,
-	}))
+		client.Send(protocol.MustMessage(protocol.MsgAnswerAck, protocol.AnswerAckPayload{
+			Round:    payload.Round,
+			Accepted: result.Accepted,
+			Reason:   result.Reason,
+		}))
+	} else {
+		ra := map[string]interface{}{
+			"type":      "answer",
+			"player_id": client.PlayerID,
+			"payload":   payload,
+		}
+		data, _ := json.Marshal(ra)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		h.redis.Underlying().Publish(ctx, "game:actions:"+payload.GameID, data)
+	}
 }
 
 func (h *Hub) handleReconnect(client *Client, msg *protocol.Message) {
@@ -208,6 +233,34 @@ func (h *Hub) SendToPlayer(playerID string, msg *protocol.Message) {
 
 	if exists && client.IsConnected() {
 		client.Send(msg)
+		return
+	}
+
+	// Try cross-node pubsub if locally missing
+	data, err := json.Marshal(msg)
+	if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		h.redis.Underlying().Publish(ctx, "player:messages:"+playerID, data)
+	}
+}
+
+func (h *Hub) listenPubSub() {
+	ch := h.pubsub.Channel()
+	for msg := range ch {
+		if strings.HasPrefix(msg.Channel, "player:messages:") {
+			playerID := strings.TrimPrefix(msg.Channel, "player:messages:")
+			h.mu.RLock()
+			client, exists := h.clients[playerID]
+			h.mu.RUnlock()
+
+			if exists && client.IsConnected() {
+				var protoMsg protocol.Message
+				if err := json.Unmarshal([]byte(msg.Payload), &protoMsg); err == nil {
+					client.Send(&protoMsg)
+				}
+			}
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package matchmaker
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 	"time"
@@ -144,6 +145,13 @@ func (m *Matchmaker) matchLoop() {
 }
 
 func (m *Matchmaker) tryMatch() {
+	locked, err := m.redis.SetNX("mm:lock", "1", time.Second)
+	if err != nil || !locked {
+		// Another node is currently processing the match queue
+		return
+	}
+	defer m.redis.Del("mm:lock")
+
 	script := `
 		local qlen = redis.call('LLEN', KEYS[1])
 		if qlen < 2 then
@@ -159,7 +167,10 @@ func (m *Matchmaker) tryMatch() {
 		return nil
 	`
 
-	result, err := m.redis.Underlying().Eval(m.redis.Context(), script, []string{queueKey}).Result()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	result, err := m.redis.Underlying().Eval(ctx, script, []string{queueKey}).Result()
 	if err != nil || result == nil {
 		return
 	}
@@ -179,6 +190,7 @@ func (m *Matchmaker) tryMatch() {
 	if err != nil {
 		m.redis.RPush(queueKey, p2ID)
 		m.cleanupPlayerKeys(p1ID)
+		m.notifyPlayerError(p1ID, "Matchmaking data corrupted. Please rejoin the queue.")
 		return
 	}
 
@@ -186,10 +198,23 @@ func (m *Matchmaker) tryMatch() {
 	if err != nil {
 		m.redis.RPush(queueKey, p1ID)
 		m.cleanupPlayerKeys(p2ID)
+		m.notifyPlayerError(p2ID, "Matchmaking data corrupted. Please rejoin the queue.")
 		return
 	}
 
 	m.createMatch(p1, p2)
+}
+
+func (m *Matchmaker) notifyPlayerError(playerID string, message string) {
+	if m.onMatchFound == nil {
+		return
+	}
+
+	msg := protocol.MustMessage(protocol.MsgError, protocol.ErrorPayload{
+		Code:    "matchmaking_error",
+		Message: message,
+	})
+	m.onMatchFound(playerID, msg)
 }
 
 func (m *Matchmaker) cleanupPlayerKeys(playerID string) {

@@ -2,12 +2,14 @@ package game
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/mentalarena/backend/internal/metrics"
 	"github.com/mentalarena/backend/internal/protocol"
+	redisclient "github.com/mentalarena/backend/internal/redis"
 	"github.com/rs/zerolog"
 )
 
@@ -28,6 +30,7 @@ type GameManager struct {
 	cfg ManagerConfig
 
 	sendToPlayer func(playerID string, msg *protocol.Message)
+	redis        *redisclient.Client
 
 	shutdownCh chan struct{}
 	wg         sync.WaitGroup
@@ -35,11 +38,12 @@ type GameManager struct {
 	logger zerolog.Logger
 }
 
-func NewGameManager(cfg ManagerConfig, logger zerolog.Logger) *GameManager {
+func NewGameManager(cfg ManagerConfig, rdb *redisclient.Client, logger zerolog.Logger) *GameManager {
 	return &GameManager{
 		sessions:    make(map[string]*GameSession),
 		playerGames: make(map[string]string),
 		cfg:         cfg,
+		redis:       rdb,
 		shutdownCh:  make(chan struct{}),
 		logger:      logger.With().Str("component", "game_manager").Logger(),
 	}
@@ -73,6 +77,8 @@ func (gm *GameManager) CreateGame(p1, p2 PlayerInfo) (*GameSession, error) {
 	gm.sessions[gameID] = session
 	gm.playerGames[p1.PlayerID] = gameID
 	gm.playerGames[p2.PlayerID] = gameID
+
+	go gm.listenForRemoteActions(gameID)
 
 	metrics.MatchesCreated.Inc()
 	metrics.ActiveGames.Inc()
@@ -258,6 +264,49 @@ func (gm *GameManager) handleGameEnd(gameID string) {
 	delete(gm.sessions, gameID)
 
 	gm.logger.Info().Str("game_id", gameID).Msg("game_ended_and_cleaned_up")
+}
+
+type RemoteAction struct {
+	Type     string                 `json:"type"`
+	PlayerID string                 `json:"player_id"`
+	Payload  protocol.AnswerPayload `json:"payload"`
+}
+
+func (gm *GameManager) listenForRemoteActions(gameID string) {
+	ctx := context.Background()
+	pubsub := gm.redis.Underlying().Subscribe(ctx, "game:actions:"+gameID)
+	defer pubsub.Close()
+
+	ch := pubsub.Channel()
+	for {
+		select {
+		case <-gm.shutdownCh:
+			return
+		case msg := <-ch:
+			var ra RemoteAction
+			if err := json.Unmarshal([]byte(msg.Payload), &ra); err != nil {
+				continue
+			}
+
+			if ra.Type == "answer" {
+				res := gm.SubmitAnswer(ra.PlayerID, ra.Payload)
+				if gm.sendToPlayer != nil {
+					gm.sendToPlayer(ra.PlayerID, protocol.MustMessage(protocol.MsgAnswerAck, protocol.AnswerAckPayload{
+						Round:    ra.Payload.Round,
+						Accepted: res.Accepted,
+						Reason:   res.Reason,
+					}))
+				}
+			}
+		case <-time.After(30 * time.Second):
+			gm.mu.RLock()
+			_, exists := gm.sessions[gameID]
+			gm.mu.RUnlock()
+			if !exists {
+				return
+			}
+		}
+	}
 }
 
 var (

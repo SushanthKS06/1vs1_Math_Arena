@@ -41,13 +41,13 @@ func TestFullGameFlow(t *testing.T) {
 		RoundDuration: 2 * time.Second,
 		GracePeriod:   5 * time.Second,
 		Difficulty:    1,
-	}, logger)
+	}, rdb, logger)
 
 	mm := matchmaker.NewMatchmaker(rdb, gm, logger)
 	mm.Start()
 	defer mm.Stop()
 
-	hub := ws.NewHub(gm, mm, logger)
+	hub := ws.NewHub(gm, mm, rdb, logger)
 	go hub.Run()
 
 	mm.SetOnMatchFound(hub.SendToPlayer)

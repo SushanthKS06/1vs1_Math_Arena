@@ -28,28 +28,35 @@ type Client struct {
 	mu        sync.Mutex
 	connected bool
 
-	messageTimestamps []time.Time
-	maxMsgPerSecond   int
+	tokens     float64
+	lastRefill time.Time
+	refillRate float64
+	bucketSize float64
 
 	logger zerolog.Logger
 }
 
 func NewClient(hub *Hub, conn *websocket.Conn, playerID, displayName string, logger zerolog.Logger) *Client {
 	return &Client{
-		hub:               hub,
-		conn:              conn,
-		sendCh:            make(chan []byte, 256),
-		PlayerID:          playerID,
-		DisplayName:       displayName,
-		connected:         true,
-		messageTimestamps: make([]time.Time, 0, 100),
-		maxMsgPerSecond:   20,
-		logger:            logger.With().Str("player_id", playerID).Logger(),
+		hub:         hub,
+		conn:        conn,
+		sendCh:      make(chan []byte, 256),
+		PlayerID:    playerID,
+		DisplayName: displayName,
+		connected:   true,
+		tokens:      20.0,
+		lastRefill:  time.Now(),
+		refillRate:  20.0,
+		bucketSize:  20.0,
+		logger:      logger.With().Str("player_id", playerID).Logger(),
 	}
 }
 
 func (c *Client) ReadPump() {
 	defer func() {
+		if r := recover(); r != nil {
+			c.logger.Error().Interface("panic", r).Msg("panic_in_read_pump_recovered")
+		}
 		c.hub.unregisterCh <- c
 		c.conn.Close()
 	}()
@@ -157,22 +164,24 @@ func (c *Client) sendError(code, message string) {
 }
 
 func (c *Client) isRateLimited() bool {
-	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.messageTimestamps = append(c.messageTimestamps, now)
+	now := time.Now()
+	elapsed := now.Sub(c.lastRefill).Seconds()
 
-	cutoff := now.Add(-time.Second)
-	i := 0
-	for ; i < len(c.messageTimestamps); i++ {
-		if c.messageTimestamps[i].After(cutoff) {
-			break
-		}
+	c.tokens += elapsed * c.refillRate
+	if c.tokens > c.bucketSize {
+		c.tokens = c.bucketSize
 	}
-	c.messageTimestamps = c.messageTimestamps[i:]
+	c.lastRefill = now
 
-	return len(c.messageTimestamps) > c.maxMsgPerSecond
+	if c.tokens >= 1.0 {
+		c.tokens -= 1.0
+		return false
+	}
+
+	return true
 }
 
 func (c *Client) Close() {

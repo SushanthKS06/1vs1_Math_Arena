@@ -43,11 +43,11 @@ func main() {
 		GracePeriod:      cfg.GracePeriod,
 		CountdownSeconds: cfg.CountdownSeconds,
 		Difficulty:       2,
-	}, logger)
+	}, redis, logger)
 
 	mm := matchmaker.NewMatchmaker(redis, gameManager, logger)
 
-	hub := ws.NewHub(gameManager, mm, logger)
+	hub := ws.NewHub(gameManager, mm, redis, logger)
 	go hub.Run()
 
 	mm.SetOnMatchFound(hub.SendToPlayer)

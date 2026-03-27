@@ -248,12 +248,12 @@ func setupTestServer(t *testing.T) (*httptest.Server, func()) {
 		GracePeriod:      10 * time.Second,
 		CountdownSeconds: 1,
 		Difficulty:       1,
-	}, logger)
+	}, rdb, logger)
 
 	mm := matchmaker.NewMatchmaker(rdb, gm, logger)
 	mm.Start()
 
-	hub := ws.NewHub(gm, mm, logger)
+	hub := ws.NewHub(gm, mm, rdb, logger)
 	go hub.Run()
 
 	mm.SetOnMatchFound(hub.SendToPlayer)

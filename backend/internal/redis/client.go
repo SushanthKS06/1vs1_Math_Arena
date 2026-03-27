@@ -39,47 +39,69 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) Set(key string, value interface{}, expiration time.Duration) error {
-	return c.rdb.Set(c.ctx, key, value, expiration).Err()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return c.rdb.Set(ctx, key, value, expiration).Err()
 }
 
 func (c *Client) Get(key string) (string, error) {
-	return c.rdb.Get(c.ctx, key).Result()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return c.rdb.Get(ctx, key).Result()
 }
 
 func (c *Client) SetNX(key string, value interface{}, expiration time.Duration) (bool, error) {
-	return c.rdb.SetNX(c.ctx, key, value, expiration).Result()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return c.rdb.SetNX(ctx, key, value, expiration).Result()
 }
 
 func (c *Client) Del(keys ...string) error {
-	return c.rdb.Del(c.ctx, keys...).Err()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return c.rdb.Del(ctx, keys...).Err()
 }
 
 func (c *Client) RPush(key string, values ...interface{}) error {
-	return c.rdb.RPush(c.ctx, key, values...).Err()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return c.rdb.RPush(ctx, key, values...).Err()
 }
 
 func (c *Client) LPop(key string) (string, error) {
-	return c.rdb.LPop(c.ctx, key).Result()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return c.rdb.LPop(ctx, key).Result()
 }
 
 func (c *Client) LRange(key string, start, stop int64) ([]string, error) {
-	return c.rdb.LRange(c.ctx, key, start, stop).Result()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return c.rdb.LRange(ctx, key, start, stop).Result()
 }
 
 func (c *Client) LLen(key string) (int64, error) {
-	return c.rdb.LLen(c.ctx, key).Result()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return c.rdb.LLen(ctx, key).Result()
 }
 
 func (c *Client) LRem(key string, count int64, value interface{}) error {
-	return c.rdb.LRem(c.ctx, key, count, value).Err()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return c.rdb.LRem(ctx, key, count, value).Err()
 }
 
 func (c *Client) Exists(keys ...string) (int64, error) {
-	return c.rdb.Exists(c.ctx, keys...).Result()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return c.rdb.Exists(ctx, keys...).Result()
 }
 
 func (c *Client) Expire(key string, expiration time.Duration) error {
-	return c.rdb.Expire(c.ctx, key, expiration).Err()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return c.rdb.Expire(ctx, key, expiration).Err()
 }
 
 func (c *Client) Pipeline() redis.Pipeliner {
@@ -90,6 +112,7 @@ func (c *Client) Underlying() *redis.Client {
 	return c.rdb
 }
 
+// Deprecated: create your own contexts with timeout where needed
 func (c *Client) Context() context.Context {
-	return c.ctx
+	return context.Background()
 }
